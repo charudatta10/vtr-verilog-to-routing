@@ -169,11 +169,10 @@ static t_heap* timing_driven_route_connection_from_heap(int sink_node,
                                                         std::vector<int>& modified_rr_node_inf,
                                                         RouterStats& router_stats);
 
-static std::vector<t_heap> timing_driven_find_all_shortest_paths_from_heap(
-    const t_conn_cost_params cost_params,
-    t_bb bounding_box,
-    std::vector<int>& modified_rr_node_inf,
-    RouterStats& router_stats);
+static std::vector<t_heap> timing_driven_find_all_shortest_paths_from_heap(const t_conn_cost_params cost_params,
+                                                                           t_bb bounding_box,
+                                                                           std::vector<int>& modified_rr_node_inf,
+                                                                           RouterStats& router_stats);
 
 static void timing_driven_expand_cheapest(t_heap* cheapest,
                                           int target_node,
@@ -450,19 +449,18 @@ bool try_timing_driven_route(const t_router_opts& router_opts,
          * Route each net
          */
         for (auto net_id : sorted_nets) {
-            bool is_routable = try_timing_driven_route_net(
-                net_id,
-                itry,
-                pres_fac,
-                router_opts,
-                connections_inf,
-                router_iteration_stats,
-                route_structs.pin_criticality,
-                route_structs.rt_node_of_sink,
-                net_delay,
-                *router_lookahead,
-                netlist_pin_lookup,
-                route_timing_info, budgeting_inf);
+            bool is_routable = try_timing_driven_route_net(net_id,
+                                                           itry,
+                                                           pres_fac,
+                                                           router_opts,
+                                                           connections_inf,
+                                                           router_iteration_stats,
+                                                           route_structs.pin_criticality,
+                                                           route_structs.rt_node_of_sink,
+                                                           net_delay,
+                                                           *router_lookahead,
+                                                           netlist_pin_lookup,
+                                                           route_timing_info, budgeting_inf);
 
             if (!is_routable) {
                 return (false); //Impossible to route
@@ -851,17 +849,15 @@ void free_timing_driven_route_structs(float* pin_criticality, int* sink_order, t
 }
 
 timing_driven_route_structs::timing_driven_route_structs() {
-    alloc_timing_driven_route_structs(
-        &pin_criticality,
-        &sink_order,
-        &rt_node_of_sink);
+    alloc_timing_driven_route_structs(&pin_criticality,
+                                      &sink_order,
+                                      &rt_node_of_sink);
 }
 
 timing_driven_route_structs::~timing_driven_route_structs() {
-    free_timing_driven_route_structs(
-        pin_criticality,
-        sink_order,
-        rt_node_of_sink);
+    free_timing_driven_route_structs(pin_criticality,
+                                     sink_order,
+                                     rt_node_of_sink);
 }
 
 void reduce_budgets_if_congested(route_budgets& budgeting_inf,
@@ -1186,6 +1182,31 @@ t_heap* timing_driven_route_connection_from_route_tree(t_rt_node* rt_root,
                                                                 router_stats);
 
     if (cheapest == nullptr) {
+        //Found no path found within the current bounding box.
+        //Try again with no bounding box (i.e. a full device grid bounding box).
+        //
+        //Note that the additional run-time overhead of re-trying only occurs
+        //when we were otherwise going to give up -- the typical case (route
+        //found with the bounding box) remains fast and never re-tries .
+        VTR_LOG_WARN("No routing path for connection to sink_rr %d, retrying with full device bounding box\n", sink_node);
+
+        auto& device_ctx = g_vpr_ctx.device();
+
+        t_bb full_device_bounding_box;
+        full_device_bounding_box.xmin = 0;
+        full_device_bounding_box.ymin = 0;
+        full_device_bounding_box.xmax = device_ctx.grid.width() - 1;
+        full_device_bounding_box.ymax = device_ctx.grid.height() - 1;
+
+        cheapest = timing_driven_route_connection_from_heap(sink_node,
+                                                            cost_params,
+                                                            full_device_bounding_box,
+                                                            router_lookahead,
+                                                            modified_rr_node_inf,
+                                                            router_stats);
+    }
+
+    if (cheapest == nullptr) {
         VTR_LOG("%s\n", describe_unrouteable_connection(source_node, sink_node).c_str());
 
         free_route_tree(rt_root);
@@ -1302,12 +1323,11 @@ static t_heap* timing_driven_route_connection_from_heap(int sink_node,
 }
 
 //Find shortest paths from specified route tree to all nodes in the RR graph
-std::vector<t_heap> timing_driven_find_all_shortest_paths_from_route_tree(
-    t_rt_node* rt_root,
-    const t_conn_cost_params cost_params,
-    t_bb bounding_box,
-    std::vector<int>& modified_rr_node_inf,
-    RouterStats& router_stats) {
+std::vector<t_heap> timing_driven_find_all_shortest_paths_from_route_tree(t_rt_node* rt_root,
+                                                                          const t_conn_cost_params cost_params,
+                                                                          t_bb bounding_box,
+                                                                          std::vector<int>& modified_rr_node_inf,
+                                                                          RouterStats& router_stats) {
     //Add the route tree to the heap with no specific target node
     int target_node = OPEN;
     auto router_lookahead = make_router_lookahead(e_router_lookahead::NO_OP);
@@ -1326,11 +1346,10 @@ std::vector<t_heap> timing_driven_find_all_shortest_paths_from_route_tree(
 //
 //Note that to re-use code used for the regular A*-based router we use a
 //no-operation lookahead which always returns zero.
-static std::vector<t_heap> timing_driven_find_all_shortest_paths_from_heap(
-    const t_conn_cost_params cost_params,
-    t_bb bounding_box,
-    std::vector<int>& modified_rr_node_inf,
-    RouterStats& router_stats) {
+static std::vector<t_heap> timing_driven_find_all_shortest_paths_from_heap(const t_conn_cost_params cost_params,
+                                                                           t_bb bounding_box,
+                                                                           std::vector<int>& modified_rr_node_inf,
+                                                                           RouterStats& router_stats) {
     auto router_lookahead = make_router_lookahead(e_router_lookahead::NO_OP);
 
     auto& device_ctx = g_vpr_ctx.device();
@@ -1778,7 +1797,14 @@ static void timing_driven_expand_neighbour(t_heap* current,
         || to_xlow > bounding_box.xmax    //Strictly right of BB right-edge
         || to_yhigh < bounding_box.ymin   //Strictly below BB bottom-edge
         || to_ylow > bounding_box.ymax) { //Strictly above BB top-edge
-        return;                           /* Node is outside (expanded) bounding box. */
+        VTR_LOGV_DEBUG(f_router_debug,
+                       "      Pruned expansion of node %d edge %d -> %d"
+                       " (to node location %d,%dx%d,%d outside of expanded"
+                       " net bounding box %d,%dx%d,%d\n",
+                       from_node, from_edge, to_node,
+                       to_xlow, to_ylow, to_xhigh, to_yhigh,
+                       bounding_box.xmin, bounding_box.ymin, bounding_box.xmax, bounding_box.ymax);
+        return; /* Node is outside (expanded) bounding box. */
     }
 
     /* Prune away IPINs that lead to blocks other than the target one.  Avoids  *
@@ -1794,6 +1820,13 @@ static void timing_driven_expand_neighbour(t_heap* current,
                 || to_ylow < target_bb.ymin
                 || to_xhigh > target_bb.xmax
                 || to_yhigh > target_bb.ymax) {
+                VTR_LOGV_DEBUG(f_router_debug,
+                               "      Pruned expansion of node %d edge %d -> %d"
+                               " (to node is IPIN at (%d,%d)x(%d,%d) which does not"
+                               " lead to target block (%d,%d)x(%d,%d)\n",
+                               from_node, from_edge, to_node,
+                               to_xlow, to_ylow, to_xhigh, to_yhigh,
+                               target_bb.xmin, target_bb.ymin, target_bb.xmax, target_bb.ymax);
                 return;
             }
         }
@@ -1802,22 +1835,20 @@ static void timing_driven_expand_neighbour(t_heap* current,
     VTR_LOGV_DEBUG(f_router_debug, "      Expanding node %d edge %d -> %d\n",
                    from_node, from_edge, to_node);
 
-    timing_driven_add_to_heap(
-        cost_params,
-        router_lookahead,
-        current, from_node, to_node, from_edge, target_node, router_stats);
+    timing_driven_add_to_heap(cost_params,
+                              router_lookahead,
+                              current, from_node, to_node, from_edge, target_node, router_stats);
 }
 
 //Add to_node to the heap, and also add any nodes which are connected by non-configurable edges
-static void timing_driven_add_to_heap(
-    const t_conn_cost_params cost_params,
-    const RouterLookahead& router_lookahead,
-    const t_heap* current,
-    const int from_node,
-    const int to_node,
-    const int iconn,
-    const int target_node,
-    RouterStats& router_stats) {
+static void timing_driven_add_to_heap(const t_conn_cost_params cost_params,
+                                      const RouterLookahead& router_lookahead,
+                                      const t_heap* current,
+                                      const int from_node,
+                                      const int to_node,
+                                      const int iconn,
+                                      const int target_node,
+                                      RouterStats& router_stats) {
     t_heap* next = alloc_heap_data();
     next->index = to_node;
 
