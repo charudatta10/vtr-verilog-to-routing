@@ -3552,7 +3552,7 @@ static int check_placement_costs(const t_placer_costs& costs,
         //VTR_LOG("delay_cost recomputed from scratch: %g\n", delay_cost_check);
         if (fabs(delay_cost_check - costs.delay_cost) > costs.delay_cost * ERROR_TOL) {
             VTR_LOG_WARN("delay_cost_check: %g and delay_cost: %g differ in check_place.\n",
-                          delay_cost_check, costs.delay_cost);
+                         delay_cost_check, costs.delay_cost);
         }
     }
     return error;
