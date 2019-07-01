@@ -7,7 +7,7 @@
 /* Number of CLBs I think the average conn. goes. */
 static const int CLB_DIST = 3;
 
-PQ_Entry::PQ_Entry(
+util::PQ_Entry::PQ_Entry(
     int set_rr_node_ind,
     int switch_ind,
     float parent_delay,
@@ -156,10 +156,10 @@ Cost_Entry Expansion_Cost_Entry::get_median_entry() const {
 }
 
 /* iterates over the children of the specified node and selectively pushes them onto the priority queue */
-void expand_dijkstra_neighbours(PQ_Entry parent_entry,
+void expand_dijkstra_neighbours(util::PQ_Entry parent_entry,
                                 std::vector<float>& node_visited_costs,
                                 std::vector<bool>& node_expanded,
-                                std::priority_queue<PQ_Entry>& pq) {
+                                std::priority_queue<util::PQ_Entry>& pq) {
     auto& device_ctx = g_vpr_ctx.device();
 
     int parent_ind = parent_entry.rr_node_ind;
@@ -175,8 +175,8 @@ void expand_dijkstra_neighbours(PQ_Entry parent_entry,
             continue;
         }
 
-        PQ_Entry child_entry(child_node_ind, switch_ind, parent_entry.delay,
-                             parent_entry.R_upstream, parent_entry.congestion_upstream, false);
+        util::PQ_Entry child_entry(child_node_ind, switch_ind, parent_entry.delay,
+                                   parent_entry.R_upstream, parent_entry.congestion_upstream, false);
 
         VTR_ASSERT(child_entry.cost >= 0);
 

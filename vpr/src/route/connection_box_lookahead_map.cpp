@@ -409,10 +409,10 @@ static void run_dijkstra(int start_node_ind,
      * expansion queue */
     std::vector<float> node_visited_costs(device_ctx.rr_nodes.size(), -1.0);
     /* a priority queue for expansion */
-    std::priority_queue<PQ_Entry> pq;
+    std::priority_queue<util::PQ_Entry> pq;
 
     /* first entry has no upstream delay or congestion */
-    PQ_Entry first_entry(start_node_ind, UNDEFINED, 0, 0, 0, true);
+    util::PQ_Entry first_entry(start_node_ind, UNDEFINED, 0, 0, 0, true);
 
     pq.push(first_entry);
 
@@ -424,7 +424,7 @@ static void run_dijkstra(int start_node_ind,
 
     /* now do routing */
     while (!pq.empty()) {
-        PQ_Entry current = pq.top();
+        util::PQ_Entry current = pq.top();
         pq.pop();
 
         int node_ind = current.rr_node_ind;
