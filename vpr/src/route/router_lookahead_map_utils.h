@@ -115,6 +115,7 @@ class Expansion_Cost_Entry {
     }
 };
 
+namespace util {
 /* a class that represents an entry in the Dijkstra expansion priority queue */
 class PQ_Entry {
   public:
@@ -133,10 +134,11 @@ class PQ_Entry {
         return (this->cost > obj.cost);
     }
 };
+} // namespace util
 
-void expand_dijkstra_neighbours(PQ_Entry parent_entry,
+void expand_dijkstra_neighbours(util::PQ_Entry parent_entry,
                                 std::vector<float>& node_visited_costs,
                                 std::vector<bool>& node_expanded,
-                                std::priority_queue<PQ_Entry>& pq);
+                                std::priority_queue<util::PQ_Entry>& pq);
 
 #endif
