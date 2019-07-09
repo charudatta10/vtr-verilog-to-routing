@@ -80,11 +80,6 @@ class MapLookahead : public RouterLookahead {
     }
 };
 
-class ConnectionBoxMapLookahead : public RouterLookahead {
-  protected:
-    float get_expected_cost(int node, int target_node, const t_conn_cost_params& params, float R_upstream) const override;
-};
-
 class NoOpLookahead : public RouterLookahead {
   protected:
     float get_expected_cost(int node, int target_node, const t_conn_cost_params& params, float R_upstream) const override;

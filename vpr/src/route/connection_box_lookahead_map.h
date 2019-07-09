@@ -3,12 +3,16 @@
 
 #include <vector>
 #include "physical_types.h"
+#include "router_lookahead.h"
 
-void compute_connection_box_lookahead(
-    const std::vector<t_segment_inf>& segment_inf);
+class ConnectionBoxMapLookahead : public RouterLookahead {
+  public:
+    float get_expected_cost(int node, int target_node, const t_conn_cost_params& params, float R_upstream) const override;
+    void compute(const std::vector<t_segment_inf>& segment_inf) override;
 
-float get_connection_box_lookahead_map_cost(int from_node_ind,
-                                            int to_node_ind,
-                                            float criticality_fac);
+    void read(const std::string& file) override;
+    void write(const std::string& file) const override;
+};
+
 
 #endif
