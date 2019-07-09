@@ -43,6 +43,7 @@ endif()
 
 #Create the library
 add_library(libvpr STATIC
+             ${CAPNP_SRCS}
              ${LIB_HEADERS}
              ${LIB_SOURCES}
 )

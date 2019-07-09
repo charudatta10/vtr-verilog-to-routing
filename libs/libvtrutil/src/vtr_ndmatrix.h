@@ -182,16 +182,15 @@ class NdMatrixBase {
     }
 
     // Flat accessors of NdMatrix
-    const T& get(size_t i) const {
+    const T &get(size_t i) const {
         VTR_ASSERT_SAFE(i < size_);
         return data_[i];
     }
 
-    T& get(size_t i) {
+    T &get(size_t i) {
         VTR_ASSERT_SAFE(i < size_);
         return data_[i];
     }
-
   public: //Mutators
     //Set all elements to 'value'
     void fill(T value) {

@@ -11,6 +11,14 @@
 #include "vtr_time.h"
 #include "echo_files.h"
 
+#include "route_timing.h"
+
+#include "capnp/serialize.h"
+#include "connection_map.capnp.h"
+#include "ndmatrix_serdes.h"
+#include "mmap_file.h"
+#include "serdes_utils.h"
+
 /* we're profiling routing cost over many tracks for each wire type, so we'll
  * have many cost entries at each |dx|,|dy| offset. There are many ways to
  * "boil down" the many costs at each offset to a single entry for a given
@@ -197,6 +205,9 @@ class CostMap {
         fclose(fp);
     }
 
+    void read(const std::string& file);
+    void write(const std::string& file) const;
+
   private:
     std::vector<vtr::NdMatrix<Cost_Entry, 2>> cost_map_;
     std::vector<std::pair<int, int>> offset_;
@@ -261,7 +272,7 @@ static constexpr int kMinProfile = 1;
 //  - kMaxProfile is exceeded.
 static constexpr int kMaxProfile = 7;
 
-void compute_connection_box_lookahead(
+static void compute_connection_box_lookahead(
     const std::vector<t_segment_inf>& segment_inf) {
     size_t num_segments = segment_inf.size();
     vtr::ScopedStartFinishTimer timer("Computing connection box lookahead map");
@@ -321,7 +332,7 @@ void compute_connection_box_lookahead(
     }
 }
 
-float get_connection_box_lookahead_map_cost(int from_node_ind,
+static float get_connection_box_lookahead_map_cost(int from_node_ind,
                                             int to_node_ind,
                                             float criticality_fac) {
     if (from_node_ind == to_node_ind) {
@@ -458,3 +469,111 @@ static void run_dijkstra(int start_node_ind,
         node_expanded[node_ind] = true;
     }
 }
+
+void ConnectionBoxMapLookahead::compute(const std::vector<t_segment_inf>& segment_inf) {
+    compute_connection_box_lookahead(segment_inf);
+}
+
+float ConnectionBoxMapLookahead::get_expected_cost(
+    int current_node,
+    int target_node,
+    const t_conn_cost_params& params,
+    float /*R_upstream*/) const {
+    auto& device_ctx = g_vpr_ctx.device();
+
+    t_rr_type rr_type = device_ctx.rr_nodes[current_node].type();
+
+    if (rr_type == CHANX || rr_type == CHANY) {
+        return get_connection_box_lookahead_map_cost(
+            current_node, target_node, params.criticality);
+    } else if (rr_type == IPIN) { /* Change if you're allowing route-throughs */
+        return (device_ctx.rr_indexed_data[SINK_COST_INDEX].base_cost);
+    } else { /* Change this if you want to investigate route-throughs */
+        return (0.);
+    }
+}
+
+void ConnectionBoxMapLookahead::read(const std::string& file) {
+    g_cost_map.read(file);
+}
+void ConnectionBoxMapLookahead::write(const std::string& file) const {
+    g_cost_map.write(file);
+}
+
+static void ToCostEntry(Cost_Entry * out, const VprCostEntry::Reader & in) {
+    out->delay = in.getDelay();
+    out->congestion = in.getCongestion();
+}
+
+static void FromCostEntry(VprCostEntry::Builder * out, const Cost_Entry & in) {
+    out->setDelay(in.delay);
+    out->setCongestion(in.congestion);
+}
+
+void CostMap::read(const std::string& file) {
+    MmapFile f(file);
+    ::capnp::FlatArrayMessageReader reader(f.getData());
+
+    auto cost_map = reader.getRoot<VprCostMap>();
+
+    {
+        const auto &segment_map = cost_map.getSegmentMap();
+        segment_map_.resize(segment_map.size());
+        auto dst_iter = segment_map_.begin();
+        for(const auto & src : segment_map) {
+            *dst_iter++ = src;
+        }
+    }
+
+    {
+        const auto & offset = cost_map.getOffset();
+        offset_.resize(offset.size());
+        auto dst_iter = offset_.begin();
+        for(const auto & src : offset) {
+            *dst_iter++ = std::make_pair(src.getX(), src.getY());
+        }
+    }
+
+    {
+        const auto & cost_maps = cost_map.getCostMap();
+        cost_map_.resize(cost_maps.size());
+        auto dst_iter = cost_map_.begin();
+        for(const auto & src : cost_maps) {
+            ToNdMatrix<2, VprCostEntry, Cost_Entry>(&(*dst_iter++), src, ToCostEntry);
+        }
+    }
+}
+
+void CostMap::write(const std::string& file) const {
+    ::capnp::MallocMessageBuilder builder;
+
+    auto cost_map = builder.initRoot<VprCostMap>();
+
+    {
+        auto segment_map = cost_map.initSegmentMap(segment_map_.size());
+        for(size_t i = 0; i < segment_map_.size(); ++i) {
+            segment_map.set(i, segment_map_[i]);
+        }
+    }
+
+    {
+        auto offset = cost_map.initOffset(offset_.size());
+        for(size_t i = 0; i < offset_.size(); ++i) {
+            auto elem = offset[i];
+            elem.setX(offset_[i].first);
+            elem.setY(offset_[i].second);
+        }
+    }
+
+    {
+        auto cost_maps = cost_map.initCostMap(cost_map_.size());
+        for(size_t i = 0; i < cost_map_.size(); ++i) {
+            Matrix<VprCostEntry>::Builder elem = cost_maps[i];
+            FromNdMatrix<2, VprCostEntry, Cost_Entry>(
+                    &elem, cost_map_[i], FromCostEntry);
+        }
+    }
+
+    writeMessageToFile(file, &builder);
+}
+
