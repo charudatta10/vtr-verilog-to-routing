@@ -55,6 +55,7 @@ void verify_segments(pugi::xml_node parent, const pugiutil::loc_data& loc_data, 
 void verify_blocks(pugi::xml_node parent, const pugiutil::loc_data& loc_data);
 void process_blocks(pugi::xml_node parent, const pugiutil::loc_data& loc_data);
 void verify_grid(pugi::xml_node parent, const pugiutil::loc_data& loc_data, const DeviceGrid& grid);
+void process_nodes_and_switches_bin(FILE* fp, int* wire_to_rr_ipin_switch, bool is_global_graph, const std::vector<t_segment_inf>& segment_inf, int numSwitches);
 void process_nodes(pugi::xml_node parent, const pugiutil::loc_data& loc_data);
 void process_connection_boxes(pugi::xml_node parent, const pugiutil::loc_data& loc_data);
 void process_edges(pugi::xml_node parent, const pugiutil::loc_data& loc_data, int* wire_to_rr_ipin_switch, const int num_rr_switches);
@@ -62,6 +63,7 @@ void process_channels(t_chan_width& chan_width, pugi::xml_node parent, const pug
 void process_rr_node_indices(const DeviceGrid& grid);
 void process_seg_id(pugi::xml_node parent, const pugiutil::loc_data& loc_data);
 void set_cost_indices(pugi::xml_node parent, const pugiutil::loc_data& loc_data, const bool is_global_graph, const int num_seg_types);
+void set_cost_index_bin(int inode, t_rr_type node_type, const bool is_global_graph, const int num_seg_types, short seg_id);
 
 /************************ Subroutine definitions ****************************/
 
@@ -148,15 +150,6 @@ void load_rr_file(const t_graph_type graph_type,
         int max_chan_width = (is_global_graph ? 1 : nodes_per_chan.max);
         VTR_ASSERT(max_chan_width > 0);
 
-        /* Alloc rr nodes and count count nodes */
-        next_component = get_single_child(rr_graph, "rr_nodes", loc_data);
-
-        int num_rr_nodes = count_children(next_component, "node", loc_data);
-
-        device_ctx.rr_nodes.resize(num_rr_nodes);
-        device_ctx.connection_boxes.resize_nodes(num_rr_nodes);
-        process_nodes(next_component, loc_data);
-
         /* Loads edges, switches, and node look up tables*/
         next_component = get_single_child(rr_graph, "switches", loc_data);
 
@@ -164,26 +157,54 @@ void load_rr_file(const t_graph_type graph_type,
         device_ctx.rr_switch_inf.resize(numSwitches);
 
         process_switches(next_component, loc_data);
+        /* Branches to binary format */
+        next_component = get_single_child(rr_graph, "binary_nodes_and_edges", loc_data, OPTIONAL);
+        if (next_component) {
+            auto filename = get_attribute(next_component, "file", loc_data).as_string("");
+            VTR_LOG("Using Binary File: %s\n", filename);
+            FILE* fp = fopen(filename, "rb");
+            if (fp == NULL) {
+                VPR_THROW(VPR_ERROR_OTHER, "Binary File %s Does Not Exist\n", filename);
+            }
 
-        next_component = get_single_child(rr_graph, "rr_edges", loc_data);
-        process_edges(next_component, loc_data, wire_to_rr_ipin_switch, numSwitches);
+            process_nodes_and_switches_bin(fp, wire_to_rr_ipin_switch, is_global_graph, segment_inf, numSwitches);
 
-        //Partition the rr graph edges for efficient access to configurable/non-configurable
-        //edge subsets. Must be done after RR switches have been allocated
-        partition_rr_graph_edges(device_ctx);
+            partition_rr_graph_edges(device_ctx);
+            process_rr_node_indices(grid);
+            init_fan_in(device_ctx.rr_nodes, device_ctx.rr_nodes.size());
+            alloc_and_load_rr_indexed_data(segment_inf, device_ctx.rr_node_indices,
+                                           max_chan_width, *wire_to_rr_ipin_switch, base_cost_type);
 
-        process_rr_node_indices(grid);
+        } else {
+            /* Alloc rr nodes and count count nodes */
+            next_component = get_single_child(rr_graph, "rr_nodes", loc_data);
 
-        init_fan_in(device_ctx.rr_nodes, device_ctx.rr_nodes.size());
+            int num_rr_nodes = count_children(next_component, "node", loc_data);
 
-        //sets the cost index and seg id information
-        next_component = get_single_child(rr_graph, "rr_nodes", loc_data);
-        set_cost_indices(next_component, loc_data, is_global_graph, segment_inf.size());
+            device_ctx.rr_nodes.resize(num_rr_nodes);
+            device_ctx.connection_boxes.resize_nodes(num_rr_nodes);
+            process_nodes(next_component, loc_data);
 
-        alloc_and_load_rr_indexed_data(segment_inf, device_ctx.rr_node_indices,
-                                       max_chan_width, *wire_to_rr_ipin_switch, base_cost_type);
+            next_component = get_single_child(rr_graph, "rr_edges", loc_data);
+            process_edges(next_component, loc_data, wire_to_rr_ipin_switch, numSwitches);
 
-        process_seg_id(next_component, loc_data);
+            //Partition the rr graph edges for efficient access to configurable/non-configurable
+            //edge subsets. Must be done after RR switches have been allocated
+            partition_rr_graph_edges(device_ctx);
+
+            process_rr_node_indices(grid);
+
+            init_fan_in(device_ctx.rr_nodes, device_ctx.rr_nodes.size());
+
+            //sets the cost index and seg id information
+            next_component = get_single_child(rr_graph, "rr_nodes", loc_data);
+            set_cost_indices(next_component, loc_data, is_global_graph, segment_inf.size());
+
+            alloc_and_load_rr_indexed_data(segment_inf, device_ctx.rr_node_indices,
+                                           max_chan_width, *wire_to_rr_ipin_switch, base_cost_type);
+
+            process_seg_id(next_component, loc_data);
+        }
 
         device_ctx.chan_width = nodes_per_chan;
 
@@ -192,6 +213,103 @@ void load_rr_file(const t_graph_type graph_type,
 
     } catch (XmlError& e) {
         vpr_throw(VPR_ERROR_ROUTE, read_rr_graph_name, e.line(), "%s", e.what());
+    }
+}
+
+void process_nodes_and_switches_bin(FILE* fp,
+                                    int* wire_to_rr_ipin_switch,
+                                    bool is_global_graph,
+                                    const std::vector<t_segment_inf>& segment_inf,
+                                    int numSwitches) {
+    auto& device_ctx = g_vpr_ctx.mutable_device();
+    uint32_t magic_num;
+    uint16_t format_version;
+    uint16_t header_length;
+    uint64_t num_rr_nodes;
+    fread_secure(&magic_num, sizeof(magic_num), 1, fp);
+    fread_secure(&format_version, sizeof(format_version), 1, fp);
+    fread_secure(&header_length, sizeof(header_length), 1, fp);
+    char* header = new char[header_length + 1];
+    header[header_length] = '\0';
+    fread_secure(header, sizeof(char), header_length, fp);
+    fread_secure(&num_rr_nodes, sizeof(num_rr_nodes), 1, fp);
+    device_ctx.rr_nodes.resize(num_rr_nodes);
+
+    if (magic_num != BINARY_MAGIC_NUM) {
+        VTR_LOG_WARN("Not a VPR Binary rr_graph file\n");
+    }
+
+    if (format_version != BINARY_FILE_VERSION) {
+        VTR_LOG_WARN("Binary file format versions do not match\n");
+    }
+
+    int inode;
+    t_rr_type node_type;
+    uint16_t num_edges;
+    e_direction direction;
+    e_side side;
+    int edge_sink_node;
+    uint16_t edge_switch;
+    uint16_t capacity;
+    float R;
+    float C;
+    uint16_t pos[5];
+
+    for (uint64_t i = 0; i < num_rr_nodes; i++) {
+        fread_secure(&inode, sizeof(inode), 1, fp);
+        fread_secure(&node_type, sizeof(node_type), 1, fp);
+        auto& node = device_ctx.rr_nodes[inode];
+        node.set_type(node_type);
+        if (node.type() == CHANX || node.type() == CHANY) {
+            fread_secure(&direction, sizeof(direction), 1, fp);
+            node.set_direction(direction);
+        }
+
+        fread_secure(&capacity, sizeof(capacity), 1, fp);
+        if (capacity > 0)
+            node.set_capacity(capacity);
+        fread_secure(pos, sizeof(*pos), 5, fp);
+        node.set_coordinates(pos[0], pos[1], pos[2], pos[3]);
+        node.set_ptc_num(pos[4]);
+        if (node.type() == IPIN || node.type() == OPIN) {
+            fread_secure(&side, sizeof(side), 1, fp);
+            node.set_side(side);
+        }
+
+        fread_secure(&R, sizeof(R), 1, fp);
+        fread_secure(&C, sizeof(C), 1, fp);
+        node.set_rc_index(find_create_rr_rc_data(R, C));
+
+        fread_secure(&num_edges, sizeof(num_edges), 1, fp);
+
+        node.set_num_edges(num_edges);
+        for (int j = 0; j < num_edges; j++) {
+            fread_secure(&edge_sink_node, sizeof(edge_sink_node), 1, fp);
+            fread_secure(&edge_switch, sizeof(edge_switch), 1, fp);
+            node.set_edge_sink_node(j, edge_sink_node);
+            node.set_edge_switch(j, edge_switch);
+        }
+        set_cost_index_bin(inode, node_type, is_global_graph, segment_inf.size(), 0);
+    }
+    std::vector<int> count_for_wire_to_ipin_switches;
+    count_for_wire_to_ipin_switches.resize(numSwitches, 0);
+    for (uint64_t i = 0; i < num_rr_nodes; i++) {
+        auto& node = device_ctx.rr_nodes[i];
+        if (node.type() == CHANX || node.type() == CHANY) {
+            num_edges = node.num_edges();
+            for (int j = 0; j < num_edges; j++) {
+                if (device_ctx.rr_nodes[node.edge_sink_node(j)].type() == IPIN) {
+                    count_for_wire_to_ipin_switches[j]++;
+                }
+            }
+        }
+    }
+    int max = -1;
+    for (int j = 0; j < numSwitches; j++) {
+        if (count_for_wire_to_ipin_switches[j] > max) {
+            *wire_to_rr_ipin_switch = j;
+            max = count_for_wire_to_ipin_switches[j];
+        }
     }
 }
 
@@ -218,7 +336,7 @@ void process_switches(pugi::xml_node parent, const pugiutil::loc_data& loc_data)
         }
 
         if (name != nullptr && !found_arch_name) {
-            VPR_FATAL_ERROR(VPR_ERROR_ROUTE, "Switch name '%s' not found in architecture\n", name);
+            VPR_THROW(VPR_ERROR_ROUTE, "Switch name '%s' not found in architecture\n", name);
         }
 
         rr_switch.name = name;
@@ -236,7 +354,7 @@ void process_switches(pugi::xml_node parent, const pugiutil::loc_data& loc_data)
         } else if (switch_type_str == "buffer") {
             switch_type = SwitchType::BUFFER;
         } else {
-            VPR_FATAL_ERROR(VPR_ERROR_ROUTE, "Invalid switch type '%s'\n", switch_type_str.c_str());
+            VPR_THROW(VPR_ERROR_ROUTE, "Invalid switch type '%s'\n", switch_type_str.c_str());
         }
         rr_switch.set_type(switch_type);
         SwitchSubnode = get_single_child(Switch, "timing", loc_data, OPTIONAL);
@@ -329,8 +447,8 @@ void process_nodes(pugi::xml_node parent, const pugiutil::loc_data& loc_data) {
             }
 
         } else {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Valid inputs for class types are \"CHANX\", \"CHANY\",\"SOURCE\", \"SINK\",\"OPIN\", and \"IPIN\".");
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Valid inputs for class types are \"CHANX\", \"CHANY\",\"SOURCE\", \"SINK\",\"OPIN\", and \"IPIN\".");
         }
 
         if (node.type() == CHANX || node.type() == CHANY) {
@@ -433,9 +551,9 @@ void process_edges(pugi::xml_node parent, const pugiutil::loc_data& loc_data, in
     while (edges) {
         size_t source_node = get_attribute(edges, "src_node", loc_data).as_uint();
         if (source_node >= device_ctx.rr_nodes.size()) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "source_node %d is larger than rr_nodes.size() %d",
-                            source_node, device_ctx.rr_nodes.size());
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "source_node %d is larger than rr_nodes.size() %d",
+                      source_node, device_ctx.rr_nodes.size());
         }
 
         num_edges_for_node[source_node]++;
@@ -463,15 +581,15 @@ void process_edges(pugi::xml_node parent, const pugiutil::loc_data& loc_data, in
         int switch_id = get_attribute(edges, "switch_id", loc_data).as_int();
 
         if (sink_node >= device_ctx.rr_nodes.size()) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "sink_node %d is larger than rr_nodes.size() %d",
-                            sink_node, device_ctx.rr_nodes.size());
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "sink_node %d is larger than rr_nodes.size() %d",
+                      sink_node, device_ctx.rr_nodes.size());
         }
 
         if (switch_id >= num_rr_switches) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "switch_id %d is larger than num_rr_switches %d",
-                            switch_id, num_rr_switches);
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "switch_id %d is larger than num_rr_switches %d",
+                      switch_id, num_rr_switches);
         }
 
         /*Keeps track of the number of the specific type of switch that connects a wire to an ipin
@@ -527,9 +645,9 @@ void process_channels(t_chan_width& chan_width, pugi::xml_node parent, const pug
     while (channelLists) {
         size_t index = get_attribute(channelLists, "index", loc_data).as_uint();
         if (index >= chan_width.x_list.size()) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "index %d on x_list exceeds x_list size %u",
-                            index, chan_width.x_list.size());
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "index %d on x_list exceeds x_list size %u",
+                      index, chan_width.x_list.size());
         }
         chan_width.x_list[index] = get_attribute(channelLists, "info", loc_data).as_float();
         channelLists = channelLists.next_sibling(channelLists.name());
@@ -538,9 +656,9 @@ void process_channels(t_chan_width& chan_width, pugi::xml_node parent, const pug
     while (channelLists) {
         size_t index = get_attribute(channelLists, "index", loc_data).as_uint();
         if (index >= chan_width.y_list.size()) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "index %d on y_list exceeds y_list size %u",
-                            index, chan_width.y_list.size());
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "index %d on y_list exceeds y_list size %u",
+                      index, chan_width.y_list.size());
         }
         chan_width.y_list[index] = get_attribute(channelLists, "info", loc_data).as_float();
         channelLists = channelLists.next_sibling(channelLists.name());
@@ -561,18 +679,18 @@ void verify_grid(pugi::xml_node parent, const pugiutil::loc_data& loc_data, cons
         const t_grid_tile& grid_tile = grid[x][y];
 
         if (grid_tile.type->index != get_attribute(grid_node, "block_type_id", loc_data).as_int(0)) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's block_type_id at (%d, %d): arch used ID %d, RR graph used ID %d.", x, y,
-                            (grid_tile.type->index), get_attribute(grid_node, "block_type_id", loc_data).as_int(0));
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's block_type_id at (%d, %d): arch used ID %d, RR graph used ID %d.", x, y,
+                      (grid_tile.type->index), get_attribute(grid_node, "block_type_id", loc_data).as_int(0));
         }
         if (grid_tile.width_offset != get_attribute(grid_node, "width_offset", loc_data).as_float(0)) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's width_offset at (%d, %d)", x, y);
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's width_offset at (%d, %d)", x, y);
         }
 
         if (grid_tile.height_offset != get_attribute(grid_node, "height_offset", loc_data).as_float(0)) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's height_offset at (%d, %d)", x, y);
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's height_offset at (%d, %d)", x, y);
         }
         grid_node = grid_node.next_sibling(grid_node.name());
     }
@@ -601,17 +719,17 @@ void verify_blocks(pugi::xml_node parent, const pugiutil::loc_data& loc_data) {
         const char* name = get_attribute(Block, "name", loc_data).as_string(nullptr);
 
         if (strcmp(block_info.name, name) != 0) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's block name: arch uses name %s, RR graph uses name %s", block_info.name, name);
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's block name: arch uses name %s, RR graph uses name %s", block_info.name, name);
         }
 
         if (block_info.width != get_attribute(Block, "width", loc_data).as_float(0)) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's block width");
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's block width");
         }
         if (block_info.height != get_attribute(Block, "height", loc_data).as_float(0)) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's block height");
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's block height");
         }
 
         pin_class = get_first_child(Block, "pin_class", loc_data, OPTIONAL);
@@ -631,19 +749,19 @@ void verify_blocks(pugi::xml_node parent, const pugiutil::loc_data& loc_data) {
             } else if (strcmp(typeInfo, "INPUT") == 0) {
                 type = RECEIVER;
             } else {
-                VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                "Valid inputs for class types are \"OPEN\", \"OUTPUT\", and \"INPUT\".");
+                vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                          "Valid inputs for class types are \"OPEN\", \"OUTPUT\", and \"INPUT\".");
                 type = OPEN;
             }
 
             if (class_inf.type != type) {
-                VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                "Architecture file does not match RR graph's block type");
+                vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                          "Architecture file does not match RR graph's block type");
             }
 
             if (class_inf.num_pins != (int)count_children(pin_class, "pin", loc_data)) {
-                VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                "Incorrect number of pins in %d pin_class in block %s", classNum, block_info.name);
+                vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                          "Incorrect number of pins in %d pin_class in block %s", classNum, block_info.name);
             }
 
             pin = get_first_child(pin_class, "pin", loc_data, OPTIONAL);
@@ -652,13 +770,13 @@ void verify_blocks(pugi::xml_node parent, const pugiutil::loc_data& loc_data) {
                 auto index = pin_index_by_num(class_inf, num);
 
                 if (index < 0) {
-                    VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                    "Architecture file does not match RR graph's block pin list: invalid ptc for pin class");
+                    vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                              "Architecture file does not match RR graph's block pin list: invalid ptc for pin class");
                 }
 
                 if (pin.child_value() != block_type_pin_index_to_name(&block_info, class_inf.pinlist[index])) {
-                    VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                    "Architecture file does not match RR graph's block pin list");
+                    vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                              "Architecture file does not match RR graph's block pin list");
                 }
                 pin = pin.next_sibling("pin");
             }
@@ -678,20 +796,20 @@ void verify_segments(pugi::xml_node parent, const pugiutil::loc_data& loc_data, 
         int segNum = get_attribute(Segment, "id", loc_data).as_int();
         const char* name = get_attribute(Segment, "name", loc_data).as_string();
         if (strcmp(segment_inf[segNum].name.c_str(), name) != 0) {
-            VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                            "Architecture file does not match RR graph's segment name: arch uses %s, RR graph uses %s", segment_inf[segNum].name.c_str(), name);
+            vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                      "Architecture file does not match RR graph's segment name: arch uses %s, RR graph uses %s", segment_inf[segNum].name.c_str(), name);
         }
 
         subnode = get_single_child(parent, "timing", loc_data, OPTIONAL);
 
         if (subnode) {
             if (segment_inf[segNum].Rmetal != get_attribute(subnode, "R_per_meter", loc_data).as_float(0)) {
-                VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                "Architecture file does not match RR graph's segment R_per_meter");
+                vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                          "Architecture file does not match RR graph's segment R_per_meter");
             }
             if (segment_inf[segNum].Cmetal != get_attribute(subnode, "C_per_meter", loc_data).as_float(0)) {
-                VPR_FATAL_ERROR(VPR_ERROR_OTHER,
-                                "Architecture file does not match RR graph's segment C_per_meter");
+                vpr_throw(VPR_ERROR_OTHER, __FILE__, __LINE__,
+                          "Architecture file does not match RR graph's segment C_per_meter");
             }
         }
         Segment = Segment.next_sibling(Segment.name());
@@ -820,9 +938,9 @@ void process_rr_node_indices(const DeviceGrid& grid) {
                 for (int ix = node.xlow(); ix <= node.xhigh(); ix++) {
                     count = node.ptc_num();
                     if (count >= int(indices[CHANX][iy][ix][0].size())) {
-                        VPR_FATAL_ERROR(VPR_ERROR_ROUTE,
-                                        "Ptc index %d for CHANX (%d, %d) is out of bounds, size = %zu",
-                                        count, ix, iy, indices[CHANX][iy][ix][0].size());
+                        VPR_THROW(VPR_ERROR_ROUTE,
+                                  "Ptc index %d for CHANX (%d, %d) is out of bounds, size = %zu",
+                                  count, ix, iy, indices[CHANX][iy][ix][0].size());
                     }
                     indices[CHANX][iy][ix][0][count] = inode;
                 }
@@ -832,9 +950,9 @@ void process_rr_node_indices(const DeviceGrid& grid) {
                 for (int iy = node.ylow(); iy <= node.yhigh(); iy++) {
                     count = node.ptc_num();
                     if (count >= int(indices[CHANY][ix][iy][0].size())) {
-                        VPR_FATAL_ERROR(VPR_ERROR_ROUTE,
-                                        "Ptc index %d for CHANY (%d, %d) is out of bounds, size = %zu",
-                                        count, ix, iy, indices[CHANY][ix][iy][0].size());
+                        VPR_THROW(VPR_ERROR_ROUTE,
+                                  "Ptc index %d for CHANY (%d, %d) is out of bounds, size = %zu",
+                                  count, ix, iy, indices[CHANY][ix][iy][0].size());
                     }
                     indices[CHANY][ix][iy][0][count] = inode;
                 }
@@ -931,4 +1049,31 @@ void process_connection_boxes(pugi::xml_node parent, const pugiutil::loc_data& l
     }
 
     device_ctx.connection_boxes.reset_boxes(std::make_pair(x_dim, y_dim), boxes);
+}
+
+/* This function sets the Source pins, sink pins, ipin, and opin
+ * to their unique cost index identifier. CHANX and CHANY cost indicies are set after the
+ * seg_id is read in from the rr graph */
+void set_cost_index_bin(int inode, t_rr_type node_type, const bool is_global_graph, const int num_seg_types, short seg_id) {
+    auto& device_ctx = g_vpr_ctx.mutable_device();
+    auto& node = device_ctx.rr_nodes[inode];
+    //set the cost index in order to load the segment information, rr nodes should be set already
+    if (node_type == SOURCE) {
+        node.set_cost_index(SOURCE_COST_INDEX);
+    } else if (node_type == SINK) {
+        node.set_cost_index(SINK_COST_INDEX);
+    } else if (node_type == IPIN) {
+        node.set_cost_index(IPIN_COST_INDEX);
+    } else if (node_type == OPIN) {
+        node.set_cost_index(OPIN_COST_INDEX);
+    } else if (node_type == CHANX || node_type == CHANY) {
+        /*CHANX and CHANY cost index is dependent on the segment id*/
+        if (is_global_graph) {
+            node.set_cost_index(0);
+        } else if (device_ctx.rr_nodes[inode].type() == CHANX) {
+            node.set_cost_index(CHANX_COST_INDEX_START + seg_id);
+        } else if (device_ctx.rr_nodes[inode].type() == CHANY) {
+            node.set_cost_index(CHANX_COST_INDEX_START + num_seg_types + seg_id);
+        }
+    }
 }
