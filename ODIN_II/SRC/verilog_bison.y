@@ -452,7 +452,7 @@ always:
 	| vALWAYS statement									{$$ = newAlways(NULL, $2, yylineno);}
 
 generate:
-	vGENERATE list_of_generate_items vENDGENERATE	{$$ = newGenerate($2, yylineno);}
+	vGENERATE generate_item vENDGENERATE	{$$ = $2;}
 	;
 
 loop_generate_construct:
@@ -479,9 +479,9 @@ case_generate_items:
 	;
 
 generate_block:
-	generate_item										{$$ = $1;}
+	generate_item										{$$ = newList(BLOCK, $1);}
 	| vBEGIN list_of_generate_items vEND				{$$ = $2;}
-	| vBEGIN ':' vSYMBOL_ID list_of_generate_items vEND	{$$ = $4;}
+	| vBEGIN ':' vSYMBOL_ID list_of_generate_items vEND	{free($3); $$ = $4;}
 	;
 
 function_statement:
@@ -495,7 +495,7 @@ statement:
 	| non_blocking_assignment ';'								{$$ = $1;}
 	| conditional_statement										{$$ = $1;}
 	| case_statement											{$$ = $1;}
-	| loop_statement											{$$ = $1;}
+	| loop_statement											{$$ = newList(BLOCK, $1);}
 	| ';'														{$$ = NULL;}
 	;
 
@@ -536,7 +536,7 @@ case_items:
 
 seq_block:
 	vBEGIN stmt_list vEND			{$$ = $2;}
-	| vBEGIN ':' vSYMBOL_ID stmt_list vEND	{$$ = $4;}
+	| vBEGIN ':' vSYMBOL_ID stmt_list vEND	{free($3); $$ = $4;}
 	;
 
 stmt_list:

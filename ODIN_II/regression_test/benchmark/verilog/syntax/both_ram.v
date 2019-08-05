@@ -1,6 +1,6 @@
 // DEFINES
 `define WIDTH 8         // Bit width 
-`define DEPTH 3         // Bit depth
+`define DEPTH 16         // Bit depth
 
 module  pram(
   clock,
@@ -60,7 +60,7 @@ dual_port_ram inst2(
   .addr2(address2)
 );
 
-single_port_ram inst1(
+single_port_ram inst3(
   .we(wren1),
   .clk(clock),
   .data(value_in),

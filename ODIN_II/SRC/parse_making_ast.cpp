@@ -45,18 +45,19 @@ extern int yylineno;
 STRING_CACHE **defines_for_module_sc;
 STRING_CACHE *modules_inputs_sc;
 STRING_CACHE *modules_outputs_sc;
+STRING_CACHE *module_instances_sc;
+
 //for function
 STRING_CACHE **defines_for_function_sc;
 STRING_CACHE *functions_inputs_sc;
 STRING_CACHE *functions_outputs_sc;
 
 STRING_CACHE *module_names_to_idx;
+STRING_CACHE *instantiated_modules;
 
 ast_node_t **block_instantiations_instance;
 int size_block_instantiations;
 
-ast_node_t **module_instantiations_instance;
-int size_module_instantiations;
 ast_node_t **module_variables_not_defined;
 int size_module_variables_not_defined;
 ast_node_t **function_instantiations_instance;
@@ -65,7 +66,6 @@ ast_node_t **function_instantiations_instance_by_module;
 int size_function_instantiations_by_module;
 
 long num_modules;
-long num_instances;
 ast_node_t **ast_modules;
 
 int num_functions;
@@ -205,15 +205,12 @@ void init_parser()
 	defines_for_function_sc = NULL;
 	/* record of each of the individual modules */
 	num_modules = 0; // we're going to record all the modules in a list so we can build a tree of them later
-	num_instances = 0;
 	num_functions = 0;
 	ast_modules = NULL;
 	ast_functions = NULL;
-	module_instantiations_instance = NULL;
 	function_instantiations_instance = NULL;
 	module_variables_not_defined = NULL;
 	size_module_variables_not_defined = 0;
-	size_module_instantiations = 0;
   	size_function_instantiations = 0;
   	function_instantiations_instance_by_module = NULL;
 	size_function_instantiations_by_module = 0;
@@ -257,6 +254,8 @@ void init_parser_for_file()
 	modules_outputs_sc = sc_new_string_cache();
 	functions_inputs_sc = sc_new_string_cache();
 	functions_outputs_sc = sc_new_string_cache();
+	instantiated_modules = sc_new_string_cache();
+	module_instances_sc = sc_new_string_cache();
 }
 
 /*---------------------------------------------------------------------------------------------
@@ -269,6 +268,8 @@ void cleanup_parser_for_file()
 	modules_outputs_sc = sc_free_string_cache(modules_outputs_sc);
 	functions_inputs_sc = sc_free_string_cache(functions_inputs_sc);
 	functions_outputs_sc = sc_free_string_cache(functions_outputs_sc);
+	instantiated_modules = sc_free_string_cache(instantiated_modules);
+	module_instances_sc = sc_free_string_cache(module_instances_sc);
 }
 
 /*---------------------------------------------------------------------------------------------
@@ -376,9 +377,9 @@ static ast_node_t *resolve_symbol_node(ids top_type, ast_node_t *symbol_node)
 			ast_node_t *newNode = NULL;
 			if(top_type == MODULE) 
 			{
-				long sc_spot = sc_lookup_string(defines_for_module_sc[num_modules-num_instances], symbol_node->types.identifier);
+				long sc_spot = sc_lookup_string(defines_for_module_sc[num_modules], symbol_node->types.identifier);
 				if(sc_spot != -1)
-					newNode = (ast_node_t *)defines_for_module_sc[num_modules-num_instances]->data[sc_spot];
+					newNode = (ast_node_t *)defines_for_module_sc[num_modules]->data[sc_spot];
 			}
        		else if(top_type == FUNCTION) 
 			{
@@ -745,7 +746,7 @@ ast_node_t *markAndProcessPortWith(ids top_type, ids port_id, ids net_id, ast_no
 ast_node_t *markAndProcessParameterWith(ids top_type, ids id, ast_node_t *parameter, bool is_signed)
 {
 	oassert((top_type == MODULE || top_type == FUNCTION) 
-		&& "can only use MODULE or FUNCITON as top type");
+		&& "can only use MODULE or FUNCTION as top type");
 		
 	long sc_spot;
 	STRING_CACHE **this_defines_sc = NULL;
@@ -754,7 +755,7 @@ ast_node_t *markAndProcessParameterWith(ids top_type, ids id, ast_node_t *parame
 	if (top_type == MODULE)
 	{
 		this_defines_sc = defines_for_module_sc;
-		this_num_modules = num_modules-num_instances;
+		this_num_modules = num_modules;
 
 	}
 	else if (top_type == FUNCTION)
@@ -805,8 +806,8 @@ ast_node_t *markAndProcessParameterWith(ids top_type, ids id, ast_node_t *parame
 ast_node_t *markAndProcessSymbolListWith(ids top_type, ids id, ast_node_t *symbol_list, bool is_signed)
 {
 	long i;
-	ast_node_t *range_min = 0;
-	ast_node_t *range_max = 0;
+	ast_node_t *range_min = NULL;
+	ast_node_t *range_max = NULL;
 
 
 	if(symbol_list)
@@ -873,7 +874,7 @@ ast_node_t *markAndProcessSymbolListWith(ids top_type, ids id, ast_node_t *symbo
 					case GENVAR:
 						oassert(is_signed && "Genvars must always be signed");
 						symbol_list->children[i]->types.variable.is_signed = is_signed;			
-						symbol_list->children[i]->types.variable.is_integer = true; // TODO: flip to is_genvar
+						symbol_list->children[i]->types.variable.is_genvar = true;
 						break;
 					default:
 						oassert(false);
@@ -1170,14 +1171,9 @@ ast_node_t *newBlocking(ast_node_t *expression1, ast_node_t *expression2, int li
  *-------------------------------------------------------------------------------------------*/
 ast_node_t *newFunctionAssigning(ast_node_t *expression1, ast_node_t *expression2, int line_number)
 {
-	char *label;
-	ast_node_t *node;
+    char *label = vtr::strdup(expression1->types.identifier);
 
-    label = (char *)vtr::calloc(strlen(expression1->types.identifier)+10,sizeof(char));
-
-	strcpy(label,expression1->types.identifier);
-
-	node = newSymbolNode(label,line_number);
+	ast_node_t *node = newSymbolNode(label,line_number);
 
     expression2->children[1]->children[1]->children[0] = newModuleConnection(NULL,  node, line_number);
 
@@ -1268,20 +1264,6 @@ ast_node_t *newAlways(ast_node_t *delay_control, ast_node_t *statement, int line
 
 	return new_node;
 }
-
-/*---------------------------------------------------------------------------------------------
- * (function: newGenerate)
- *-------------------------------------------------------------------------------------------*/
-ast_node_t *newGenerate(ast_node_t *instantiations, int line_number)
-{
-	/* create a node for this array reference */
-	ast_node_t* new_node = create_node_w_type(GENERATE, line_number, current_parse_file);
-	/* allocate child nodes to this node */
-	allocate_children_to_node(new_node, { instantiations });
-
-	return new_node;
-}
-
 /*---------------------------------------------------------------------------------------------
  * (function: newModuleConnection)
  *-------------------------------------------------------------------------------------------*/
@@ -1310,16 +1292,12 @@ ast_node_t *newModuleConnection(char* id, ast_node_t *expression, int line_numbe
  *-------------------------------------------------------------------------------------------*/
 ast_node_t *newModuleParameter(char* id, ast_node_t *expression, int line_number)
 {
-	ast_node_t *symbol_node;
+	ast_node_t *symbol_node = NULL;
 	/* create a node for this array reference */
 	ast_node_t* new_node = create_node_w_type(MODULE_PARAMETER, line_number, current_parse_file);
 	if (id != NULL)
 	{
 		symbol_node = newSymbolNode(id, line_number);
-	}
-	else
-	{
-		symbol_node = NULL;
 	}
 
 	/* allocate child nodes to this node */
@@ -1353,15 +1331,10 @@ ast_node_t *newModuleNamedInstance(char* unique_name, ast_node_t *module_connect
  *-------------------------------------------------------------------------------------------*/
 ast_node_t *newFunctionNamedInstance(ast_node_t *module_connect_list, ast_node_t *module_parameter_list, int line_number)
 {
-    char *unique_name, *aux_name;
-    int char_qntd = 100;
+	std::string buffer("function_instance_");
+	buffer += std::to_string(size_function_instantiations_by_module);
 
-    aux_name = (char *)vtr::calloc(char_qntd,sizeof(char));
-    unique_name = (char *)vtr::calloc(char_qntd,sizeof(char));
-    strcpy(unique_name,"function_instance_");
-    odin_sprintf(aux_name,"%d",size_function_instantiations_by_module);
-    strcat(unique_name,aux_name);
-	vtr::free(aux_name);
+	char *unique_name = vtr::strdup(buffer.c_str());
 
     ast_node_t *symbol_node = newSymbolNode(unique_name, line_number);
 
@@ -1397,12 +1370,21 @@ ast_node_t *newHardBlockInstance(char* module_ref_name, ast_node_t *module_named
  *-----------------------------------------------------------------------*/
 ast_node_t *newModuleInstance(char* module_ref_name, ast_node_t *module_named_instance, int line_number)
 {
-
 	long i;
 	/* create a node for this array reference */
 	ast_node_t* new_master_node = create_node_w_type(MODULE_INSTANCE, line_number, current_parse_file);
 	for(i = 0; i < module_named_instance->num_children; i++)
 	{
+		/* check if this name was already used */
+		long sc_spot = sc_add_string(module_instances_sc, module_named_instance->children[i]->children[0]->types.identifier);
+		if (module_instances_sc->data[sc_spot] != NULL)
+		{
+			error_message(PARSE_ERROR, line_number, current_parse_file, 
+				"Module already has an instance with this name (%s)\n", 
+				module_named_instance->children[i]->children[0]->types.identifier);
+		}
+		module_instances_sc->data[sc_spot] = module_named_instance->children[i];
+
 		if
 		(
 			sc_lookup_string(hard_block_names, module_ref_name) != -1
@@ -1417,31 +1399,7 @@ ast_node_t *newModuleInstance(char* module_ref_name, ast_node_t *module_named_in
 			return newHardBlockInstance(module_ref_name, instance, line_number);
 		}
 
-		// make a unique module name based on its parameter list
-		ast_node_t *module_param_list = module_named_instance->children[i]->children[2];
-		char *module_param_name = make_module_param_name(defines_for_module_sc[num_modules-num_instances], module_param_list, module_ref_name);
-		ast_node_t *symbol_node = newSymbolNode(module_param_name, line_number);
-
-		// if this is a parameterised instantiation
-		if (module_param_list)
-		{
-			// which doesn't exist in ast_modules yet
-			long sc_spot;
-			if ((sc_spot = sc_lookup_string(module_names_to_idx, module_param_name)) == -1)
-			{
-				// then add it, but set it to the symbol_node, because the
-				// module in question may not have been parsed yet
-				// later, we convert this symbol node back into a module node
-				ast_modules = (ast_node_t **)vtr::realloc(ast_modules, sizeof(ast_node_t*)*(num_modules+1));
-				ast_modules[num_modules] = symbol_node;
-				num_modules++;
-				num_instances++;
-				sc_spot = sc_add_string(module_names_to_idx, module_param_name);
-				module_names_to_idx->data[sc_spot] = symbol_node;
-				defines_for_module_sc = (STRING_CACHE**)vtr::realloc(defines_for_module_sc, sizeof(STRING_CACHE*)*(num_modules+1));
-				defines_for_module_sc[num_modules] = NULL;
-			}
-		}
+		ast_node_t *symbol_node = newSymbolNode(module_ref_name, line_number);
 
 		/* create a node for this array reference */
 		ast_node_t* new_node = create_node_w_type(MODULE_INSTANCE, line_number, current_parse_file);
@@ -1451,14 +1409,20 @@ ast_node_t *newModuleInstance(char* module_ref_name, ast_node_t *module_named_in
 			else add_child_to_node(new_master_node,new_node);
 
 		/* store the module symbol name that this calls in a list that will at the end be asociated with the module node */
-		module_instantiations_instance = (ast_node_t **)vtr::realloc(module_instantiations_instance, sizeof(ast_node_t*)*(size_module_instantiations+1));
-		module_instantiations_instance[size_module_instantiations] = new_node;
-		size_module_instantiations++;
+		sc_add_string(instantiated_modules, module_ref_name);
+
+		/* if this module has already been parsed, update */
+		for (int j = 0; j < num_modules; j++)
+		{
+			if (sc_lookup_string(instantiated_modules, ast_modules[j]->children[0]->types.identifier) != -1)
+			{
+				ast_modules[j]->types.module.is_instantiated = true;
+			}
+		}
 	}
 
 	vtr::free(module_named_instance->children);
 	vtr::free(module_named_instance);
-	vtr::free(module_ref_name);
 	return new_master_node;
 }
 
@@ -1467,11 +1431,7 @@ ast_node_t *newModuleInstance(char* module_ref_name, ast_node_t *module_named_in
  *-----------------------------------------------------------------------*/
 ast_node_t *newFunctionInstance(char* function_ref_name, ast_node_t *function_named_instance, int line_number)
 {
-	// make a unique module name based on its parameter list
-	ast_node_t *function_param_list = function_named_instance->children[2];
-
-	char *function_param_name = make_module_param_name(defines_for_module_sc[num_modules-num_instances], function_param_list, function_ref_name);
-	ast_node_t *symbol_node = newSymbolNode(function_param_name, line_number);
+	ast_node_t *symbol_node = newSymbolNode(function_ref_name, line_number);
 
     /* create a node for this array reference */
 	ast_node_t* new_node = create_node_w_type(FUNCTION_INSTANCE, line_number, current_parse_file);
@@ -1500,9 +1460,7 @@ ast_node_t *newGateInstance(char* gate_instance_name, ast_node_t *expression1, a
 		symbol_node = newSymbolNode(gate_instance_name, line_number);
 	}
 
-	char *newChar;
-	newChar = (char *)vtr::calloc(strlen(expression1->types.identifier)+10,sizeof(char));
-	strcpy(newChar,expression1->types.identifier);
+	char *newChar = vtr::strdup(expression1->types.identifier);
 	ast_node_t *newVar = newVarDeclare(newChar, NULL, NULL, NULL, NULL, NULL, line_number);
 	ast_node_t *newVarList = newList(VAR_DECLARE_LIST, newVar);
 	ast_node_t *newVarMaked = markAndProcessSymbolListWith(MODULE,WIRE, newVarList, false);
@@ -1533,11 +1491,7 @@ ast_node_t *newMultipleInputsGateInstance(char* gate_instance_name, ast_node_t *
 		symbol_node = newSymbolNode(gate_instance_name, line_number);
 	}
 
-    char *newChar;
-
-    newChar = (char *)vtr::calloc(strlen(expression1->types.identifier)+10,sizeof(char));
-
-    strcpy(newChar,expression1->types.identifier);
+    char *newChar = vtr::strdup(expression1->types.identifier);
 
     ast_node_t *newVar = newVarDeclare(newChar, NULL, NULL, NULL, NULL, NULL, line_number);
 
@@ -1645,23 +1599,24 @@ ast_node_t *newModule(char* module_name, ast_node_t *list_of_parameters, ast_nod
 	/* ports are expected to be in module items */
 	if (port_declarations)
 	{
-		add_child_at_the_beginning_of_the_node(list_of_module_items, port_declarations);
+		add_child_to_node_at_index(list_of_module_items, port_declarations, 0);
 	}
 
 	/* parameters are expected to be in module items */
 	if (list_of_parameters)
 	{
-		newList_entry(list_of_module_items, list_of_parameters);
+		add_child_to_node_at_index(list_of_module_items, list_of_parameters, 0);
 	}
 
 
 	/* allocate child nodes to this node */
 	allocate_children_to_node(new_node, { symbol_node, list_of_ports, list_of_module_items });
 
-	/* store the list of modules this module instantiates */
-	new_node->types.module.module_instantiations_instance = module_instantiations_instance;
-	new_node->types.module.size_module_instantiations = size_module_instantiations;
-	new_node->types.module.is_instantiated = false;
+	/* check if this module has been instantiated */
+	if (new_node->types.module.is_instantiated == false)
+	{
+		new_node->types.module.is_instantiated = (sc_lookup_string(instantiated_modules, module_name) != -1);
+	}
 	new_node->types.module.index = num_modules;
 
 	new_node->types.function.function_instantiations_instance = function_instantiations_instance_by_module;
@@ -1682,7 +1637,7 @@ ast_node_t *newModule(char* module_name, ast_node_t *list_of_parameters, ast_nod
 				}
 			}
 		}
-		if(!variable_found) add_child_at_the_beginning_of_the_node(list_of_module_items, module_variables_not_defined[i]);
+		if(!variable_found) add_child_to_node_at_index(list_of_module_items, module_variables_not_defined[i], 0);
 		else 				free_whole_tree(module_variables_not_defined[i]);
 	}
 
@@ -1711,30 +1666,19 @@ ast_node_t *newFunction(ast_node_t *list_of_ports, ast_node_t *list_of_module_it
 
 	long i,j;
 	long sc_spot;
-	char *function_name;
-	char *label;
 	ast_node_t *var_node;
 	ast_node_t *symbol_node, *output_node;
 
 
-	function_name = (char *)vtr::calloc(strlen(list_of_ports->children[0]->children[0]->types.identifier)+10,sizeof(char));
-	strcpy(function_name,list_of_ports->children[0]->children[0]->types.identifier);
-
-	label = (char *)vtr::calloc(strlen(list_of_ports->children[0]->children[0]->types.identifier)+10,sizeof(char));
-
-	strcpy(label,list_of_ports->children[0]->children[0]->types.identifier);
-
-	list_of_ports->children[0]->children[0]->types.identifier = label;
+	char *function_name = vtr::strdup(list_of_ports->children[0]->children[0]->types.identifier);
 
 	output_node = newList(VAR_DECLARE_LIST, list_of_ports->children[0]);
 
 	markAndProcessSymbolListWith(FUNCTION, OUTPUT, output_node, list_of_ports->children[0]->types.variable.is_signed);
 
-	add_child_at_the_beginning_of_the_node(list_of_module_items, output_node);
+	add_child_to_node_at_index(list_of_module_items, output_node, 0);
 
-	label = (char *)vtr::calloc(strlen(list_of_ports->children[0]->children[0]->types.identifier)+10,sizeof(char));
-
-	strcpy(label,list_of_ports->children[0]->children[0]->types.identifier);
+	char *label = vtr::strdup(list_of_ports->children[0]->children[0]->types.identifier);
 
 	var_node = newVarDeclare(label, NULL, NULL, NULL, NULL, NULL, yylineno);
 
@@ -1745,8 +1689,7 @@ ast_node_t *newFunction(ast_node_t *list_of_ports, ast_node_t *list_of_module_it
 		if(list_of_module_items->children[i]->type == VAR_DECLARE_LIST){
 			for(j = 0; j < list_of_module_items->children[i]->num_children; j++) {
 				if(list_of_module_items->children[i]->children[j]->types.variable.is_input){
-                    label = (char *)vtr::calloc(strlen(list_of_module_items->children[i]->children[j]->children[0]->types.identifier)+10,sizeof(char));
-                    strcpy(label,list_of_module_items->children[i]->children[j]->children[0]->types.identifier);
+                    label = vtr::strdup(list_of_module_items->children[i]->children[j]->children[0]->types.identifier);
                     var_node = newVarDeclare(label, NULL, NULL, NULL, NULL, NULL, yylineno);
 					newList_entry(list_of_ports,var_node);
 				}
@@ -1763,7 +1706,7 @@ ast_node_t *newFunction(ast_node_t *list_of_ports, ast_node_t *list_of_module_it
 	ast_node_t *port_declarations = resolve_ports(FUNCTION, list_of_ports);
 	if (port_declarations)
 	{
-		add_child_at_the_beginning_of_the_node(list_of_module_items, port_declarations);
+		add_child_to_node_at_index(list_of_module_items, port_declarations, 0);
 	}
 
 	/* allocate child nodes to this node */
@@ -1819,16 +1762,11 @@ void next_function()
 void next_module()
 {
 	num_modules ++;
-	num_instances = 0;
     num_functions = 0;
 
 	/* define the string cache for the next module */
 	defines_for_module_sc = (STRING_CACHE**)vtr::realloc(defines_for_module_sc, sizeof(STRING_CACHE*)*(num_modules+1));
 	defines_for_module_sc[num_modules] = sc_new_string_cache();
-
-	/* create a new list for the instantiations list */
-	module_instantiations_instance = NULL;
-	size_module_instantiations = 0;
 
 	function_instantiations_instance_by_module = NULL;
 	size_function_instantiations_by_module = 0;
@@ -1838,9 +1776,11 @@ void next_module()
 	/* old ones are done so clean */
 	sc_free_string_cache(modules_inputs_sc);
 	sc_free_string_cache(modules_outputs_sc);
+	sc_free_string_cache(module_instances_sc);
 	/* make for next module */
 	modules_inputs_sc = sc_new_string_cache();
 	modules_outputs_sc = sc_new_string_cache();
+	module_instances_sc = sc_new_string_cache();
 }
 
 /*--------------------------------------------------------------------------
@@ -1849,10 +1789,8 @@ void next_module()
 ast_node_t *newDefparam(ids /*id*/, ast_node_t *val, int line_number)
 {
 	ast_node_t *new_node = NULL;
-	ast_node_t *ref_node;
 	char *module_instance_name = NULL;
 	long i;
-	int j;
 	//long sc_spot;
 	if(val)
 	{
@@ -1861,14 +1799,12 @@ ast_node_t *newDefparam(ids /*id*/, ast_node_t *val, int line_number)
 			for(i = 0; i < val->num_children - 1; i++)
 			{
 				oassert(val->children[i]->num_children > 0);
-				if(i == 0 && val->num_children > 2)
-					module_instance_name = val->children[i]->children[0]->types.identifier;
-				else if(i == 0 && val->num_children == 2)
-					module_instance_name = val->children[i]->children[0]->types.identifier;
+				if(i == 0 && val->num_children >= 2)
+					module_instance_name = vtr::strdup(val->children[i]->children[0]->types.identifier);
 				else
 				{
 					module_instance_name = strcat(module_instance_name, ".");
-					module_instance_name = strcat(module_instance_name, val->children[i]->children[0]->types.identifier);
+					module_instance_name = strcat(module_instance_name, vtr::strdup(val->children[i]->children[0]->types.identifier));
 				}
 			}
 			new_node = val->children[(val->num_children - 1)];
@@ -1879,41 +1815,18 @@ ast_node_t *newDefparam(ids /*id*/, ast_node_t *val, int line_number)
 			new_node->children[5]->types.variable.is_parameter = true;
 			new_node->children[5]->shared_node = true;
 			new_node->types.identifier = module_instance_name;
+			new_node->line_number = line_number;
+
+			val->children[(val->num_children - 1)] = NULL;
+			val = free_whole_tree(val);			
 		}
 	}
-	//flag = 0 can't find the instance
-	int flag = 0;
-	for(j = 0 ; j < size_module_instantiations ; j++)
+	
+	if(new_node)
 	{
-		if(flag == 0)
-		{
-			ref_node = module_instantiations_instance[j];
-			if(module_instance_name != NULL)
-			{
-				if(strcmp(ref_node->children[1]->children[0]->types.identifier, module_instance_name) == 0)
-				{
-					if(ref_node->children[1]->children[2])
-						add_child_to_node(ref_node->children[1]->children[2], new_node);
-					else
-					{
-						ast_node_t* symbol_node = create_node_w_type(MODULE_PARAMETER_LIST, line_number, current_parse_file);
-						ref_node->children[1]->children[2] = symbol_node;
-						add_child_to_node(ref_node->children[1]->children[2], new_node);
-					}
-					flag = 1;
-				}
-			}
-		}
-	}
-	//if the instance never showed before, dealt with this parameter in function convert_ast_to_netlist_recursing_via_modules
-	if(flag == 0)
-	{
-		if(new_node)
-		{
-			new_node->shared_node = false;
-			return new_node;
-		//	add_child_to_node(new_node, symbol_node);
-		}
+		new_node->shared_node = false;
+		return new_node;
+	//	add_child_to_node(new_node, symbol_node);
 	}
 	return NULL;
 }

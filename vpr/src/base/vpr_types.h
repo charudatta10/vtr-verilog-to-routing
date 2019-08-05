@@ -823,6 +823,9 @@ struct t_placer_opts {
     std::string post_place_timing_report_file;
 
     bool strict_checks;
+
+    std::string write_placement_delay_lookup;
+    std::string read_placement_delay_lookup;
 };
 
 /* All the parameters controlling the router's operation are in this        *
@@ -955,6 +958,9 @@ struct t_router_opts {
     std::string first_iteration_timing_report_file;
     bool strict_checks;
     bool disable_check_route;
+
+    std::string write_router_lookahead;
+    std::string read_router_lookahead;
 };
 
 struct t_analysis_opts {

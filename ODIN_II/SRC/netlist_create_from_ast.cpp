@@ -79,7 +79,7 @@ circuit_type_e type_of_circuit;
 edge_type_e circuit_edge;
 
 /* PROTOTYPES */
-STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, ast_node_t *module_items, char *module_name, STRING_CACHE *parent_param_table_sc);
+STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, ast_node_t *module_items, char *module_name);
 ast_node_t *find_top_module();
 
 void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, char *instance_name, STRING_CACHE_LIST *local_string_cache_list, int level);
@@ -145,7 +145,7 @@ void look_for_clocks(netlist_t *netlist);
  * for all parameters in this instantiation, taking into account if they
  * are being overridden by their parent
  */
-STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, ast_node_t *module_items, char *module_name, STRING_CACHE *parent_param_table_sc)
+STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, ast_node_t *module_items, char *module_name)
 {
 	/* with the top module we need to visit the entire ast tree */
 	long i, j;
@@ -177,6 +177,7 @@ STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, a
 						(var_declare->types.variable.is_output) ||
 						(var_declare->types.variable.is_reg) ||
 						(var_declare->types.variable.is_integer) ||
+						(var_declare->types.variable.is_genvar) ||
 						(var_declare->types.variable.is_wire)) continue;
 
 					oassert(module_items->children[i]->children[j]->type == VAR_DECLARE);
@@ -319,15 +320,6 @@ STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, a
 		temp_parameter_list[parameter_num-1] = temp_string;
 	}
 
-	/* now that parameters are all updated, resolve them */
-	STRING_CACHE_LIST *local_string_cache_list = (STRING_CACHE_LIST*)vtr::calloc(1, sizeof(STRING_CACHE_LIST));
-	oassert(local_string_cache_list);
-	local_string_cache_list->local_param_table_sc = local_param_table_sc;
-	
-	STRING_CACHE_LIST *parent_string_cache_list = (STRING_CACHE_LIST*)vtr::calloc(1, sizeof(STRING_CACHE_LIST));
-	oassert(parent_string_cache_list);
-	parent_string_cache_list->local_param_table_sc = parent_param_table_sc; // to check parent parameters
-
 	/* clean up */
 	if (temp_parameter_list) {
 		for (i = 0; i < parameter_num; i++) {
@@ -335,8 +327,6 @@ STRING_CACHE *create_param_table_for_module(ast_node_t* parent_parameter_list, a
 		}
 		vtr::free(temp_parameter_list);
 	}
-	vtr::free(local_string_cache_list);
-	vtr::free(parent_string_cache_list);
 
 	return local_param_table_sc;
 }
@@ -356,39 +346,6 @@ void create_netlist()
 	char top_string[] = "top";
 	// Alias the symbol nodes in ast_modules to the actual MODULE nodes
 	long i;
-	for (i = 0; i < num_modules; i++)
-	{
-		if (ast_modules[i]->type == IDENTIFIERS)
-		{
-			// double check that it's in modules_names_to_idx
-			char *module_param_name = ast_modules[i]->types.identifier;
-			long sc_spot = sc_lookup_string(module_names_to_idx, module_param_name);
-			oassert(sc_spot > -1);
-			// now isolate the original module name
-			char *underscores = strstr(module_param_name, "___");
-			oassert(underscores);
-			int len = underscores - module_param_name;
-			char *module_name = (char *)vtr::malloc((len+1)*sizeof(char));
-			strncpy(module_name, module_param_name, len);
-			module_name[len] = '\0';
-			// verify that it does exist
-			long sc_spot2 = sc_lookup_string(module_names_to_idx, module_name);
-			oassert(sc_spot2 > -1);
-			vtr::free(module_name);
-			// create a new MODULE node with new IDENTIFIER, but keep same ports and module_items
-			ast_node_t *module = (ast_node_t *)module_names_to_idx->data[sc_spot2];
-			ast_node_t *symbol_node = newSymbolNode(module_param_name, module->line_number);
-			ast_node_t* new_node = create_node_w_type(MODULE, module->line_number, module->file_number);
-			allocate_children_to_node(new_node, { symbol_node, ast_node_deep_copy(module->children[1]), ast_node_deep_copy(module->children[2]) });
-			module->types.module.is_instantiated = true;
-			new_node->types.module.index = i;
-			new_node->types.module.is_instantiated = true;
-			// and to the module_names_to_idx for parameterised name
-			module_names_to_idx->data[sc_spot] = new_node;
-			ast_modules[i] = new_node;
-		}
-		oassert(ast_modules[i]->type == MODULE);
-	}
 
 	/* we will find the top module */
 	top_module = find_top_module();
@@ -410,7 +367,7 @@ void create_netlist()
 	top_sc_list->instance_name_prefix = vtr::strdup(top_module->children[0]->types.identifier);
 
 	/* create the parameter table for the top module */
-	top_sc_list->local_param_table_sc = create_param_table_for_module(NULL, top_module->children[2], top_string, NULL);
+	top_sc_list->local_param_table_sc = create_param_table_for_module(NULL, top_module->children[2], top_string);
 	
 	/* create the symbol table for the top module */
 	top_sc_list->local_symbol_table_sc = sc_new_string_cache();
@@ -434,6 +391,12 @@ void create_netlist()
 	}
 	top_sc_list->local_param_table_sc = sc_free_string_cache(top_sc_list->local_param_table_sc);
 	top_sc_list->local_symbol_table_sc = sc_free_string_cache(top_sc_list->local_symbol_table_sc);
+
+	for (i = 0; i < top_sc_list->num_local_symbol_table; i++)
+	{
+		free_whole_tree(top_sc_list->local_symbol_table[i]);
+	}
+
 	top_sc_list->num_local_symbol_table = 0;
 	top_sc_list->local_symbol_table = (ast_node_t **)vtr::free(top_sc_list->local_symbol_table);
 	top_sc_list->instance_name_prefix = (char *)vtr::free(top_sc_list->instance_name_prefix);
@@ -468,40 +431,12 @@ void look_for_clocks(netlist_t *netlist)
 ast_node_t *find_top_module()
 {
 	long i;
-	int j;
 	long sc_spot;
 	int found_top = -1;
 	long number_of_top_modules = 0;
 
 
-	/* go through all the instantiations for each module and mark them if they've be instantiated */
-	for (i = 0; i < num_modules; i++)
-	{
-		for (j = 0; j < ast_modules[i]->types.module.size_module_instantiations; j++)
-		{
-			// get the module index from the string cache
-			sc_spot = sc_lookup_string(module_names_to_idx,
-							ast_modules[i]->types.module.module_instantiations_instance[j]->children[0]->types.identifier);
-			if ((sc_spot) != -1)
-			{
-				/* use that number to mark this module as instantiated */
-				ast_modules[((ast_node_t*)module_names_to_idx->data[sc_spot])->types.module.index]->types.module.is_instantiated = true;
-			}
-			/* Check to see if the module is a hard block - a hard block is never the top level! */
-			else if ((sc_spot = sc_lookup_string(hard_block_names, 
-							ast_modules[i]->types.module.module_instantiations_instance[j]->children[0]->types.identifier)) == -1)
-			{
-					error_message(NETLIST_ERROR,
-							ast_modules[i]->line_number,
-							ast_modules[i]->file_number,
-							"Can't find module name (%s)\n",
-							ast_modules[i]->types.module.module_instantiations_instance[j]->children[0]->types.identifier);
-			}
-			
-		}
-	}
-
-	/* now check for which module wasn't marked...this one will be the top */
+	/* check for which module wasn't marked as instantiated...this one will be the top */
 	std::string module_name_list("");
 	std::string desired_module("");
 	bool found_desired_module = false;
@@ -586,8 +521,6 @@ void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, c
 {
 	signal_list_t *list = NULL;
 
-	STRING_CACHE *local_param_table_sc = local_string_cache_list->local_param_table_sc;
-
 	/* BASE CASE is when there are no other instantiations of modules in this module */
 	if ((*current_module)->types.module.size_module_instantiations == 0 &&
 		(*current_module)->types.function.size_function_instantiations == 0)
@@ -647,10 +580,11 @@ void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, c
 			 * MODULE_INSTANCE->MODULE_NAMED_INSTANCE(child[1])->IDENTIFIER(child[0]).
 			 * module name is MODULE_INSTANCE->IDENTIFIER(child[0])
 			 */
+
 			char *temp_instance_name = make_full_ref_name(instance_name,
-					(*current_module)->types.module.module_instantiations_instance[k]->children[0]->types.identifier,
-					(*current_module)->types.module.module_instantiations_instance[k]->children[1]->children[0]->types.identifier,
-					NULL, -1);
+				(*current_module)->types.module.module_instantiations_instance[k]->children[0]->types.identifier,
+				(*current_module)->types.module.module_instantiations_instance[k]->children[1]->children[0]->types.identifier,
+				NULL, -1);
 
 			long sc_spot;
 			/* lookup the name of the module associated with this instantiated point */
@@ -660,12 +594,22 @@ void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, c
 						"Can't find module name %s\n", (*current_module)->types.module.module_instantiations_instance[k]->children[0]->types.identifier);
 			}
 
+			/* make a unique copy of this module */
+			ast_node_t *instance = ast_node_deep_copy((ast_node_t *)module_names_to_idx->data[sc_spot]);
+			
+			long sc_spot_2 = sc_add_string(module_names_to_idx, temp_instance_name);
+			oassert(sc_spot_2 > -1 && module_names_to_idx->data[sc_spot_2] == NULL);
+			module_names_to_idx->data[sc_spot_2] = (void *)instance;
+			
+			ast_modules = (ast_node_t **)vtr::realloc(ast_modules, sizeof(ast_node_t*)*(sc_spot_2 + 1));
+			ast_modules[sc_spot_2] = instance;
+
 			ast_node_t *parent_parameter_list = (*current_module)->types.module.module_instantiations_instance[k]->children[1]->children[2];
 			// create the parameter table for the instantiated module
 			STRING_CACHE *module_param_table_sc = create_param_table_for_module(parent_parameter_list,
 				/* module_items */
-				((ast_node_t*)module_names_to_idx->data[sc_spot])->children[2],
-				temp_instance_name, local_param_table_sc);
+				instance->children[2],
+				temp_instance_name);
 
 			STRING_CACHE_LIST *module_string_cache_list = (STRING_CACHE_LIST*)vtr::calloc(1, sizeof(STRING_CACHE_LIST));
 			module_string_cache_list->instance_name_prefix = vtr::strdup(temp_instance_name);
@@ -675,19 +619,25 @@ void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, c
 			module_string_cache_list->local_symbol_table_sc = sc_new_string_cache();
 			module_string_cache_list->num_local_symbol_table = 0;
 			module_string_cache_list->local_symbol_table = NULL;
-			create_symbol_table_for_module(((ast_node_t*)module_names_to_idx->data[sc_spot])->children[2], module_string_cache_list);
+			create_symbol_table_for_module(instance->children[2], module_string_cache_list);
 
 			/* elaboration */
-			simplify_ast_module(((ast_node_t**)&module_names_to_idx->data[sc_spot]), module_string_cache_list);
+			simplify_ast_module(&instance, module_string_cache_list);
 
 			/* recursive call point */
-			convert_ast_to_netlist_recursing_via_modules(((ast_node_t**)&module_names_to_idx->data[sc_spot]), temp_instance_name, module_string_cache_list, level+1);
+			convert_ast_to_netlist_recursing_via_modules(&instance, temp_instance_name, module_string_cache_list, level+1);
 
 			/* clean up */
 			vtr::free(temp_instance_name);
 
 			module_string_cache_list->local_param_table_sc = sc_free_string_cache(module_string_cache_list->local_param_table_sc);
 			module_string_cache_list->local_symbol_table_sc = sc_free_string_cache(module_string_cache_list->local_symbol_table_sc);
+
+			for (i = 0; i < module_string_cache_list->num_local_symbol_table; i++)
+			{
+				free_whole_tree(module_string_cache_list->local_symbol_table[i]);
+			}
+
 			module_string_cache_list->num_local_symbol_table = 0;
 			module_string_cache_list->local_symbol_table = (ast_node_t **)vtr::free(module_string_cache_list->local_symbol_table);
 			module_string_cache_list->instance_name_prefix = (char *)vtr::free(module_string_cache_list->instance_name_prefix);
@@ -719,7 +669,7 @@ void convert_ast_to_netlist_recursing_via_modules(ast_node_t** current_module, c
 			STRING_CACHE *function_param_table_sc = create_param_table_for_module(parent_parameter_list,
 				/* module_items */
 				((ast_node_t*)module_names_to_idx->data[sc_spot])->children[2],
-				temp_instance_name, local_param_table_sc);
+				temp_instance_name);
 
 			STRING_CACHE_LIST *function_string_cache_list = (STRING_CACHE_LIST*)vtr::calloc(1, sizeof(STRING_CACHE_LIST));
 			function_string_cache_list->instance_name_prefix = vtr::strdup(temp_instance_name);
@@ -1522,7 +1472,7 @@ nnet_t* define_nets_with_driver(ast_node_t* var_declare, char *instance_name_pre
 	long sc_spot;
 	nnet_t *new_net = NULL;
 
-	
+
 	if (var_declare->children[1] == NULL || var_declare->type == BLOCKING_STATEMENT)
 	{
 		/* FOR single driver signal since spots 1, 2, 3, 4 are NULL */
@@ -1840,6 +1790,7 @@ void create_symbol_table_for_module(ast_node_t* module_items, STRING_CACHE_LIST 
 						(var_declare->types.variable.is_output) ||
 						(var_declare->types.variable.is_reg) ||
 						(var_declare->types.variable.is_integer) ||
+						(var_declare->types.variable.is_genvar) ||
 						(var_declare->types.variable.is_wire));
 
 					if (var_declare->types.variable.is_input 
@@ -1879,7 +1830,8 @@ void create_symbol_table_for_module(ast_node_t* module_items, STRING_CACHE_LIST 
 								((ast_node_t*)local_symbol_table_sc->data[sc_spot])->types.variable.initial_value = initial_value;
 							}
 						}
-						else if ((var_declare->types.variable.is_reg) || (var_declare->types.variable.is_wire) || (var_declare->types.variable.is_integer))
+						else if ((var_declare->types.variable.is_reg) || (var_declare->types.variable.is_wire) 
+								|| (var_declare->types.variable.is_integer) || (var_declare->types.variable.is_genvar))
 						{
 							/* copy the output status over */
 							((ast_node_t*)local_symbol_table_sc->data[sc_spot])->types.variable.is_wire = var_declare->types.variable.is_wire;
@@ -1900,19 +1852,21 @@ void create_symbol_table_for_module(ast_node_t* module_items, STRING_CACHE_LIST 
 					}
 					else
 					{
+						ast_node_t *stored_var_declare = ast_node_deep_copy(var_declare);
+
 						/* store the data which is an idx here */
-						local_symbol_table_sc->data[sc_spot] = (void *)var_declare;
+						local_symbol_table_sc->data[sc_spot] = (void *)stored_var_declare;
 
 						/* store the symbol */
 						local_symbol_table = (ast_node_t **)vtr::realloc(local_symbol_table, sizeof(ast_node_t*)*(num_local_symbol_table+1));
-						local_symbol_table[num_local_symbol_table] = (ast_node_t *)var_declare;
+						local_symbol_table[num_local_symbol_table] = (ast_node_t *)stored_var_declare;
 						num_local_symbol_table ++;
 
 						/* check for an initial value and store it if found */
 						long initial_value;
-						if(check_for_initial_reg_value(var_declare, &initial_value)){
-							var_declare->types.variable.is_initialized = true;
-							var_declare->types.variable.initial_value = initial_value;
+						if(check_for_initial_reg_value(stored_var_declare, &initial_value)){
+							stored_var_declare->types.variable.is_initialized = true;
+							stored_var_declare->types.variable.initial_value = initial_value;
 						}
 					}
 					vtr::free(temp_string);
@@ -2472,14 +2426,19 @@ void connect_module_instantiation_and_alias(short PASS, ast_node_t* module_insta
 	long sc_spot_input_old;
 	long sc_spot_input_new;
 
-	char *module_instance_name = module_instance->children[0]->types.identifier;
-
+	char *module_instance_name = make_full_ref_name(instance_name_prefix, 
+		module_instance->children[0]->types.identifier,
+		module_instance->children[1]->children[0]->types.identifier,
+		NULL, -1);
+	
 	/* lookup the node of the module associated with this instantiated module */
 	if ((sc_spot = sc_lookup_string(module_names_to_idx, module_instance_name)) == -1)
 	{
 		error_message(NETLIST_ERROR, module_instance->line_number, module_instance->file_number,
 				"Can't find module %s\n", module_instance_name);
 	}
+
+	vtr::free(module_instance_name);
 
 	module_node = (ast_node_t*)module_names_to_idx->data[sc_spot];
 	module_list = module_node->children[1]; // MODULE->VAR_DECLARE_LIST(child[1])
