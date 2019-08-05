@@ -333,8 +333,8 @@ static void compute_connection_box_lookahead(
 }
 
 static float get_connection_box_lookahead_map_cost(int from_node_ind,
-                                            int to_node_ind,
-                                            float criticality_fac) {
+                                                   int to_node_ind,
+                                                   float criticality_fac) {
     if (from_node_ind == to_node_ind) {
         return 0.f;
     }
@@ -500,12 +500,12 @@ void ConnectionBoxMapLookahead::write(const std::string& file) const {
     g_cost_map.write(file);
 }
 
-static void ToCostEntry(Cost_Entry * out, const VprCostEntry::Reader & in) {
+static void ToCostEntry(Cost_Entry* out, const VprCostEntry::Reader& in) {
     out->delay = in.getDelay();
     out->congestion = in.getCongestion();
 }
 
-static void FromCostEntry(VprCostEntry::Builder * out, const Cost_Entry & in) {
+static void FromCostEntry(VprCostEntry::Builder* out, const Cost_Entry& in) {
     out->setDelay(in.delay);
     out->setCongestion(in.congestion);
 }
@@ -517,28 +517,28 @@ void CostMap::read(const std::string& file) {
     auto cost_map = reader.getRoot<VprCostMap>();
 
     {
-        const auto &segment_map = cost_map.getSegmentMap();
+        const auto& segment_map = cost_map.getSegmentMap();
         segment_map_.resize(segment_map.size());
         auto dst_iter = segment_map_.begin();
-        for(const auto & src : segment_map) {
+        for (const auto& src : segment_map) {
             *dst_iter++ = src;
         }
     }
 
     {
-        const auto & offset = cost_map.getOffset();
+        const auto& offset = cost_map.getOffset();
         offset_.resize(offset.size());
         auto dst_iter = offset_.begin();
-        for(const auto & src : offset) {
+        for (const auto& src : offset) {
             *dst_iter++ = std::make_pair(src.getX(), src.getY());
         }
     }
 
     {
-        const auto & cost_maps = cost_map.getCostMap();
+        const auto& cost_maps = cost_map.getCostMap();
         cost_map_.resize(cost_maps.size());
         auto dst_iter = cost_map_.begin();
-        for(const auto & src : cost_maps) {
+        for (const auto& src : cost_maps) {
             ToNdMatrix<2, VprCostEntry, Cost_Entry>(&(*dst_iter++), src, ToCostEntry);
         }
     }
@@ -551,14 +551,14 @@ void CostMap::write(const std::string& file) const {
 
     {
         auto segment_map = cost_map.initSegmentMap(segment_map_.size());
-        for(size_t i = 0; i < segment_map_.size(); ++i) {
+        for (size_t i = 0; i < segment_map_.size(); ++i) {
             segment_map.set(i, segment_map_[i]);
         }
     }
 
     {
         auto offset = cost_map.initOffset(offset_.size());
-        for(size_t i = 0; i < offset_.size(); ++i) {
+        for (size_t i = 0; i < offset_.size(); ++i) {
             auto elem = offset[i];
             elem.setX(offset_[i].first);
             elem.setY(offset_[i].second);
@@ -567,13 +567,12 @@ void CostMap::write(const std::string& file) const {
 
     {
         auto cost_maps = cost_map.initCostMap(cost_map_.size());
-        for(size_t i = 0; i < cost_map_.size(); ++i) {
+        for (size_t i = 0; i < cost_map_.size(); ++i) {
             Matrix<VprCostEntry>::Builder elem = cost_maps[i];
             FromNdMatrix<2, VprCostEntry, Cost_Entry>(
-                    &elem, cost_map_[i], FromCostEntry);
+                &elem, cost_map_[i], FromCostEntry);
         }
     }
 
     writeMessageToFile(file, &builder);
 }
-
