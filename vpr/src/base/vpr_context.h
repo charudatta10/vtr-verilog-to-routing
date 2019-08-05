@@ -21,6 +21,7 @@
 #include "route_traceback.h"
 #include "router_lookahead.h"
 #include "place_macro.h"
+#include "connection_box.h"
 
 //A Context is collection of state relating to a particular part of VPR
 //
@@ -195,6 +196,8 @@ struct DeviceContext : public Context {
      * Clock Network
      ********************************************************************/
     t_clock_arch* clock_arch;
+
+    ConnectionBoxes connection_boxes;
 };
 
 //State relating to power analysis
