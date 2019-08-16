@@ -19,11 +19,11 @@ class flat_map2;
 //Helper function to create a flat map from a vector of pairs
 //without haveing to explicity specify the key and value types
 template<class K, class V>
-flat_map<K, V> make_flat_map(std::vector<std::pair<K, V>> && vec) {
+flat_map<K, V> make_flat_map(std::vector<std::pair<K, V>>&& vec) {
     return flat_map<K, V>(std::move(vec));
 }
 template<class K, class V>
-flat_map2<K, V> make_flat_map2(std::vector<std::pair<K, V>> && vec) {
+flat_map2<K, V> make_flat_map2(std::vector<std::pair<K, V>>&& vec) {
     return flat_map2<K, V>(std::move(vec));
 }
 
@@ -85,7 +85,7 @@ class flat_map {
     }
 
     //direct vector constructor
-    flat_map(std::vector<value_type> &&values) {
+    flat_map(std::vector<value_type>&& values) {
         //By moving the values this should be more efficient
         //than the range constructor which must copy each element
         vec_ = std::move(values);
@@ -317,7 +317,8 @@ template<class K, class T, class Compare>
 class flat_map2 : public flat_map<K, T, Compare> {
   public:
     flat_map2() {}
-    explicit flat_map2(std::vector<typename flat_map2<K, T, Compare>::value_type> && values) : flat_map<K, T, Compare>(std::move(values)) {}
+    explicit flat_map2(std::vector<typename flat_map2<K, T, Compare>::value_type>&& values)
+        : flat_map<K, T, Compare>(std::move(values)) {}
 
     const T& operator[](const K& key) const {
         auto itr = this->find(key);

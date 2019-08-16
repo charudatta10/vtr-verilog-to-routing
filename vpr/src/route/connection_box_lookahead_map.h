@@ -14,5 +14,4 @@ class ConnectionBoxMapLookahead : public RouterLookahead {
     void write(const std::string& file) const override;
 };
 
-
 #endif
